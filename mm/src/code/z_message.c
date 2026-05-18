@@ -19,6 +19,88 @@
 #include "2s2h_assets.h"
 #include <libultraship/bridge/consolevariablebridge.h>
 
+// #region text insert
+// for text injection, via OOT approach
+#include <stdio.h>
+#include <stdlib.h>
+#include <curl/curl.h>
+
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
+typedef struct {
+    char *data;
+    size_t len;
+} ByteString;
+
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t realsize = size * nmemb;
+    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+    char *ptr = realloc(mem->memory, mem->size + realsize + 1);
+    if(!ptr) {
+        /* out of memory! */
+        printf("not enough memory (realloc returned NULL)\n");
+        return 0;
+    }
+
+    mem->memory = ptr;
+    memcpy(&(mem->memory[mem->size]), contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = 0;
+
+    return realsize;
+}
+
+ByteString ModifyMessageThroughAPI() {
+    CURL *curl;
+    CURLcode res;
+    struct MemoryStruct chunk;
+    ByteString result = {NULL, 0};
+
+    chunk.memory = malloc(1);  /* will be grown as needed by the realloc above */
+    if(chunk.memory == NULL) {
+        return result;
+    }
+    chunk.memory[0] = '\0';
+    chunk.size = 0;    /* no data at this point */
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    curl = curl_easy_init();
+
+    if(curl) {
+        struct curl_slist *headers = NULL;
+
+        headers = curl_slist_append(headers, "Content-Type: text/plain");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:5001/twitchMessage");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "send"); // left over from structure of OOT message replacement system
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+        res = curl_easy_perform(curl);
+
+        if(res != CURLE_OK){
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        }
+
+        result.data = chunk.memory;
+        result.len = chunk.size;
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    curl_global_cleanup();
+    
+    return result;
+}
+// #endregion
+
 const char* gBombersNotebookPhotos[] = {
     gBombersNotebookPhotoAnjuTex,
     gBombersNotebookPhotoKafeiTex,
@@ -3404,6 +3486,24 @@ void Message_OpenText(PlayState* play, u16 textId) {
         Message_FindMessageNES(play, textId);
         MessageTableEntry* msgEntry = (MessageTableEntry*)font->messageStart;
         msgCtx->msgLength = msgEntry->msgSize;
+        
+        // #region injection for flagged tatl chat id
+        if (textId == 0x2070){
+            ByteString msg = ModifyMessageThroughAPI();
+            
+            // print for testing received data
+            // fprintf(stderr, "Hex dump: ");
+            // for(size_t i = 0; i < msg.len; i++) {
+            //     fprintf(stderr, "%02x ", (unsigned char)msg.data[i]);
+            // }
+            // fprintf(stderr, "\n");
+            
+            msgEntry->segment = (uintptr_t)msg.data;
+            msgEntry->msgSize = msg.len;
+            msgCtx->msgLength = msgEntry->msgSize;
+            // free(msg.data); // issue if done here, not sure where to free
+        }          
+        // #endregion
         memcpy(&font->msgBuf, msgEntry->segment, msgEntry->msgSize);
         // msgCtx->msgLength = font->messageEnd;
         // DmaMgr_SendRequest0(&font->msgBuf, SEGMENT_ROM_START(message_data_static) + font->messageStart,
