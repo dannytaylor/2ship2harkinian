@@ -54,6 +54,26 @@
 #include <curl/curl.h>
 #include <stdlib.h>
 
+void sendMask(u8 nMask) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return;
+    }
+    char body[16];
+    snprintf(body, sizeof(body), "%u", (unsigned)nMask);
+
+    curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:5001/maskUpdate");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+    }
+
+    curl_easy_cleanup(curl);
+}
+
 struct QueueCheckResponse {
     char* data;
     size_t size;
@@ -4824,6 +4844,8 @@ void Player_UseItem(PlayState* play, Player* this, ItemId item) {
                     func_8082E1F0(this, NA_SE_PL_CHANGE_ARMS);
                 }
                 gSaveContext.save.equippedMask = this->currentMask;
+                sendMask(this->currentMask);
+                // fprintf(stderr,"mask2 %d\n",this->currentMask); // normal masks
             }
         } else if ((itemAction != this->heldItemAction) ||
                    ((this->heldActor == NULL) && (Player_ExplosiveFromIA(this, itemAction) > PLAYER_EXPLOSIVE_NONE))) {
@@ -8047,7 +8069,7 @@ s32 Player_ActionHandler_13(Player* this, PlayState* play) {
 
                     this->prevMask = this->currentMask;
                     if ((u32)(maskId == this->currentMask) || (this->itemAction < PLAYER_IA_MASK_GIANT) ||
-                        ((this->itemAction == PLAYER_IA_MASK_GIANT) && (this->transformation != PLAYER_FORM_HUMAN))) {
+                    ((this->itemAction == PLAYER_IA_MASK_GIANT) && (this->transformation != PLAYER_FORM_HUMAN))) {
                         if (maskId == this->currentMask) {
                             this->currentMask = PLAYER_MASK_NONE;
                         } else {
@@ -8068,6 +8090,8 @@ s32 Player_ActionHandler_13(Player* this, PlayState* play) {
                         }
                         func_808388B8(play, this, this->itemAction - PLAYER_IA_MASK_FIERCE_DEITY);
                     }
+                    sendMask(this->currentMask);
+                    // fprintf(stderr,"mask2 %d\n",this->currentMask); // transformation masks
                     gSaveContext.save.equippedMask = this->currentMask;
                 } else if (CHECK_FLAG_ALL(this->actor.flags, ACTOR_FLAG_TALK) ||
                            (this->itemAction == PLAYER_IA_PICTOGRAPH_BOX) ||
