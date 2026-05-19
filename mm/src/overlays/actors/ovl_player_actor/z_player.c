@@ -8091,7 +8091,7 @@ s32 Player_ActionHandler_13(Player* this, PlayState* play) {
                         func_808388B8(play, this, this->itemAction - PLAYER_IA_MASK_FIERCE_DEITY);
                     }
                     sendMask(this->currentMask);
-                    // fprintf(stderr,"mask2 %d\n",this->currentMask); // transformation masks
+                    // fprintf(stderr,"mask2 %d\n",this->currentMask); // transformation masks (e.g. deku)
                     gSaveContext.save.equippedMask = this->currentMask;
                 } else if (CHECK_FLAG_ALL(this->actor.flags, ACTOR_FLAG_TALK) ||
                            (this->itemAction == PLAYER_IA_PICTOGRAPH_BOX) ||
