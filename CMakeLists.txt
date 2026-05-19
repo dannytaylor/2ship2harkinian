@@ -106,7 +106,7 @@ elseif ("${CMAKE_VS_PLATFORM_NAME}" STREQUAL "x64")
 endif()
 
 vcpkg_bootstrap()
-vcpkg_install_packages(zlib bzip2 libzip libpng sdl2 sdl2-net glew glfw3 nlohmann-json tinyxml2 spdlog libogg libvorbis opus opusfile)
+vcpkg_install_packages(zlib bzip2 libzip libpng sdl2 sdl2-net glew glfw3 nlohmann-json tinyxml2 spdlog libogg libvorbis opus opusfile curl)
 endif()
 
 ################################################################################
@@ -144,6 +144,11 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux")
 else()
     message(STATUS ${CMAKE_SYSTEM_NAME})
 endif()
+
+################################################################################
+# Find/download curl Libs (For fetching twitch messages)
+################################################################################
+find_package(CURL REQUIRED)
 
 ################################################################################
 # Additional Global Settings(add specific info there)

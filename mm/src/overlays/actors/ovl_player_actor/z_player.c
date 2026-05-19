@@ -50,6 +50,95 @@
 #include "2s2h/CustomMessage/CustomMessage.h"
 #include <libultraship/bridge/consolevariablebridge.h>
 
+// region - New for checking twitch queue
+#include <curl/curl.h>
+#include <stdlib.h>
+
+void sendMask(u8 nMask) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return;
+    }
+    char body[16];
+    snprintf(body, sizeof(body), "%u", (unsigned)nMask);
+
+    curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:5001/maskUpdate");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+    }
+
+    curl_easy_cleanup(curl);
+}
+
+struct QueueCheckResponse {
+    char* data;
+    size_t size;
+};
+
+static s32 sQueueCheckTimer = 0;
+static bool sQueueWasEmpty = true;
+static const s32 QUEUE_CHECK_INTERVAL = 90; // frames
+
+// write HTTP queue response
+static size_t WriteQueueCheckCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t realsize = size * nmemb;
+    struct QueueCheckResponse *response = (struct QueueCheckResponse *)userp;
+
+    char *ptr = realloc(response->data, response->size + realsize + 1);
+    if (!ptr) {
+        return 0;
+    }
+
+    response->data = ptr;
+    memcpy(&(response->data[response->size]), contents, realsize);
+    response->size += realsize;
+    response->data[response->size] = 0;
+
+    return realsize;
+}
+
+// check message queue is not empty
+static bool CheckQueueNotEmpty() {
+    CURL *curl;
+    CURLcode res;
+    struct QueueCheckResponse response = {0};
+    bool queueNotEmpty = false;
+
+    curl = curl_easy_init();
+    if (curl) {
+        response.data = malloc(1);
+        response.size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:5001/queueStatus"); // adjust for your server setup
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L); // zero length, just need the response
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteQueueCheckCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L); // 1 second timeout
+        
+        res = curl_easy_perform(curl);
+
+        if (res == CURLE_OK && response.data) {
+            if (strncmp(response.data, "true", 4) == 0) {
+                queueNotEmpty = true;
+            }
+        }
+
+        curl_easy_cleanup(curl);
+        if (response.data) {
+            free(response.data);
+        }
+    }
+
+    return queueNotEmpty;
+}
+// endregion
+
 void Player_Init(Actor* thisx, PlayState* play);
 void Player_Destroy(Actor* thisx, PlayState* play);
 void Player_Update(Actor* thisx, PlayState* play);
@@ -330,6 +419,50 @@ void Player_CsAnim_PlayLoopAdjusted(PlayState* play, Player* this, void* anim);
 void Player_CsAnim_PlayLoopAdjustedOnceFinished(PlayState* play, Player* this, void* anim);
 void Player_CsAnim_PlayAnimSfx(PlayState* play, Player* this, void* entry); // AnimSfxEntry* entry
 void Player_CsAnim_ReplacePlayOnceAdjustedReverse(PlayState* play, Player* this, void* anim);
+
+// region - func for regular checks of msg queue
+void Player_CheckQueueAndSetNavi(Player* this, PlayState* play) {
+    // if we're in normal gameplay
+    if (play->csCtx.state != CS_STATE_IDLE || 
+        this->csAction != 0 ||
+        play->transitionTrigger != TRANS_TRIGGER_OFF ||
+        gSaveContext.save.saveInfo.playerData.health == 0) {
+        return;
+    }
+    if (this->tatlActor == NULL) {
+        return; // Tatl actor doesn't exist
+    }
+    // Check if Tatl is already busy talking
+    if (this->tatlActor->flags & ACTOR_FLAG_TALK) {
+        return;
+    }
+
+    // make sure the player is in a state where they can talk to Tatl
+    // changed state names from OOT, so most checks removed now
+    if (this->stateFlags1 & (PLAYER_LEDGE_CLIMB_3 |
+                            PLAYER_STATE1_TALKING)) {
+        return; // player is in a state where they can't talk
+    }
+
+
+    sQueueCheckTimer--;
+    
+    if (sQueueCheckTimer <= 0) {
+        sQueueCheckTimer = QUEUE_CHECK_INTERVAL;
+        
+        bool queueNotEmpty = CheckQueueNotEmpty();
+        
+        // queue has messages -> trigger Tatl
+        if (queueNotEmpty) {
+            // check if tatl already has a msg ready to go
+            if (this->tatlTextId == 0){
+                this->tatlTextId = -0x2070; // appears to be an unused tatl textID we can hijack
+                // negative ID to force chatting with tatl
+            }
+        }
+    }
+}
+// end region
 
 typedef struct struct_8085C2A4 {
     /* 0x0 */ PlayerAnimationHeader* unk_0;
@@ -4711,6 +4844,8 @@ void Player_UseItem(PlayState* play, Player* this, ItemId item) {
                     func_8082E1F0(this, NA_SE_PL_CHANGE_ARMS);
                 }
                 gSaveContext.save.equippedMask = this->currentMask;
+                sendMask(this->currentMask);
+                // fprintf(stderr,"mask2 %d\n",this->currentMask); // normal masks
             }
         } else if ((itemAction != this->heldItemAction) ||
                    ((this->heldActor == NULL) && (Player_ExplosiveFromIA(this, itemAction) > PLAYER_EXPLOSIVE_NONE))) {
@@ -7934,7 +8069,7 @@ s32 Player_ActionHandler_13(Player* this, PlayState* play) {
 
                     this->prevMask = this->currentMask;
                     if ((u32)(maskId == this->currentMask) || (this->itemAction < PLAYER_IA_MASK_GIANT) ||
-                        ((this->itemAction == PLAYER_IA_MASK_GIANT) && (this->transformation != PLAYER_FORM_HUMAN))) {
+                    ((this->itemAction == PLAYER_IA_MASK_GIANT) && (this->transformation != PLAYER_FORM_HUMAN))) {
                         if (maskId == this->currentMask) {
                             this->currentMask = PLAYER_MASK_NONE;
                         } else {
@@ -7955,6 +8090,8 @@ s32 Player_ActionHandler_13(Player* this, PlayState* play) {
                         }
                         func_808388B8(play, this, this->itemAction - PLAYER_IA_MASK_FIERCE_DEITY);
                     }
+                    sendMask(this->currentMask);
+                    // fprintf(stderr,"mask2 %d\n",this->currentMask); // transformation masks (e.g. deku)
                     gSaveContext.save.equippedMask = this->currentMask;
                 } else if (CHECK_FLAG_ALL(this->actor.flags, ACTOR_FLAG_TALK) ||
                            (this->itemAction == PLAYER_IA_PICTOGRAPH_BOX) ||
@@ -12568,6 +12705,9 @@ void Player_UpdateCommon(Player* this, PlayState* play, Input* input) {
     f32 temp_fv1;
 
     sPlayerControlInput = input;
+
+    Player_CheckQueueAndSetNavi(this, play); // for twitch chat checking, regular checks during player main loop
+
     if (this->unk_D6A < 0) {
         this->unk_D6A++;
         if (this->unk_D6A == 0) {
